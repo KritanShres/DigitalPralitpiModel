@@ -17,6 +17,7 @@ from transformers import default_data_collator
 import evaluate
 os.environ["WANDB_DISABLED"] = "true"
 os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs"
+os.makedirs("logs/")
 # torch.cuda.empty_cache()
 
 # directory and file paths
