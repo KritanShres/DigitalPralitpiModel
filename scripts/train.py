@@ -132,7 +132,7 @@ training_args = Seq2SeqTrainingArguments(
     per_device_train_batch_size = 8, #16 for 5070Ti
     fp16 = torch.cuda.is_available(), 
     weight_decay = 0.01,
-    # gradient_accumulation_steps = 1, 
+    # gradient_accumulation_steps = 2, 
     # gradient_checkpointing = True
 
     learning_rate = 5e-4,
