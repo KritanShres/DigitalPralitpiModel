@@ -18,7 +18,6 @@ from transformers.trainer_utils import get_last_checkpoint
 import evaluate
 from dotenv import load_dotenv
 
-
 # Environment configs
 load_dotenv()
 os.environ["WANDB_DISABLED"] = "true"
@@ -95,7 +94,7 @@ eval_dataset = IAMDataset(root_dir=root_dir,
                            df=test_df,
                            processor=processor)
 
-model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(encode, decode, tie_word_embeddings = False)
+model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(encode, decode)
 
 bos_id = processor.tokenizer.cls_token_id
 eos_id = processor.tokenizer.sep_token_id
@@ -105,6 +104,9 @@ model.config.decoder_start_token_id = bos_id
 model.config.eos_token_id = eos_id
 model.config.pad_token_id = pad_id
 model.config.vocab_size = model.config.decoder.vocab_size
+model.decoder.config.tie_word_embeddings = False
+
+model.config.use_cache = False
 
 # set beam search parameters
 generation_config = GenerationConfig(
@@ -118,10 +120,11 @@ generation_config = GenerationConfig(
     no_repeat_ngram_size = 3,
     length_penalty = 2.0,
     num_beams = 4,
+
+    use_cache = False
 )
 
 model.generation_config = generation_config
-
 
 training_args = Seq2SeqTrainingArguments(
     num_train_epochs = 20,
@@ -130,15 +133,15 @@ training_args = Seq2SeqTrainingArguments(
     output_dir = "./checkpoints/",
 
     per_device_train_batch_size = 8, #16 for 5070Ti
+    per_device_eval_batch_size = 16, #32 for 5070Ti: Eval is slower than training due to forward and backpass and shit
     fp16 = torch.cuda.is_available(), 
     weight_decay = 0.01,
-    # gradient_accumulation_steps = 2, 
-    # gradient_checkpointing = True
+    gradient_accumulation_steps = 2, 
+    gradient_checkpointing = True,
 
     learning_rate = 5e-4,
     optim = "adamw_torch_fused",
 
-    per_device_eval_batch_size = 8, #16 for 5070Ti
     logging_steps = 50,
     save_steps = 1000,
     eval_steps = 1000,
@@ -174,18 +177,18 @@ if torch.cuda.is_available():
     print("Device Name: ", torch.cuda.get_device_name())
 
 print(f"{'='*30}")
-print(f"DATASET STATISTICS: ")
-print("Number of training examples:", len(train_dataset))
-print("Number of validation examples:", len(eval_dataset))
+print("DATASET STATISTICS:")
+print(f"Number of training examples:   {len(train_dataset)}")
+print(f"Number of validation examples: {len(eval_dataset)}")
 
 print(f"{'='*30}")
 print(f"MODEL STATISTICS:")
-print(f"Total Parameters: {total_params:,}")
+print(f"Total Parameters:        {total_params:,}")
 print(f"Estimated Training Time: {estimate_hours: .1f} hours")
-print(f"Trainable Parameters: {trainable_params:,}")
-print(f"Effective Batch Size: {eff_batch_size}")
-print(f"Total Training Steps: {total_steps}")
-print("Steps per epoch: ", steps_per_epoch)
+print(f"Trainable Parameters:    {trainable_params:,}")
+print(f"Effective Batch Size:    {eff_batch_size}")
+print(f"Total Training Steps:    {total_steps}")
+print(f"Steps per epoch:         {steps_per_epoch}")
 
 print(f"{'='*30}")
 print("DATASET TOKEN COVERAGE: ")
@@ -194,11 +197,11 @@ print(f"Max Token Length (sample): {np.max(sample_lengths)}")
 print(f"Sequences exceeding max_length (128): {sum(l > 128 for l in sample_lengths)}")
 
 print(f"{'='*30}")
-print("\nPARAMETER BREAKDOWN:")
+print("PARAMETER BREAKDOWN:")
 print(f"Encoder Total Params: {encoder_params:,}")
 print(f"Decoder Total Params: {decoder_params:,}")
-print(f"Encoder Trainable: {encoder_trainable:,}")
-print(f"Decoder Trainable: {decoder_trainable:,}")
+print(f"Encoder Trainable:    {encoder_trainable:,}")
+print(f"Decoder Trainable:    {decoder_trainable:,}")
 
 print(f"{'='*30}")
 print("CROSS-ARCHITECTURE PARAMTER RATIO")

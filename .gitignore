@@ -1,4 +1,5 @@
 .vevn
-checkpoints
 logs
+checkpoints
 .env
+model
