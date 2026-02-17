@@ -13,14 +13,20 @@ from transformers import Seq2SeqTrainer, Seq2SeqTrainingArguments
 from transformers import ViTImageProcessor
 from transformers import GenerationConfig
 from transformers import default_data_collator
-# from datasets import load_metric
+from transformers.trainer_utils import get_last_checkpoint
 import evaluate
+from dotenv import load_dotenv
+
+
+# Environment configs
+load_dotenv()
 os.environ["WANDB_DISABLED"] = "true"
 os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs"
-os.makedirs("logs/")
-# torch.cuda.empty_cache()
+os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
+if not os.path.exists("logs"):
+    os.makedirs("logs/")
 
-# directory and file paths
+# Directory and file paths
 train_text_file = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\train.txt"
 test_text_file  = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\test.txt"
 val_text_file   = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\val.txt"
@@ -29,21 +35,18 @@ root_dir        = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg"
 def dataset_generator(data_path):
     with open(data_path, encoding="utf-8") as f:
         dataset = f.readlines()
-    # counter = 0
 
     dataset_list = []
     for i in range(len(dataset)):
-        # if counter > 30000:
-        #     break
+
         image_id = dataset[i].split("\n")[0].split(' ')[0].strip()
-        # vocab_id = int(dataset[i].split(",")[1].strip())
+
         text = dataset[i].split("\n")[0].split(' ')[1].strip()
         row = [image_id, text]
         dataset_list.append(row)
-        # counter += 1
 
     dataset_df = pd.DataFrame(dataset_list, columns=['file_name', 'text'])
-    # dataset_df.head()
+
     return dataset_df
     
 train_df = dataset_generator(train_text_file)
@@ -63,22 +66,17 @@ class IAMDataset(Dataset):
         return len(self.df)
 
     def __getitem__(self, idx):
-        # get file name + text 
         file_name = self.df['file_name'][idx]
         text = str(self.df.loc[idx, "text"]).strip()
-        # prepare image (i.e. resize + normalize)
-        # image = Image.open(self.root_dir / file_name).convert("RGB")
-        image = Image.open(os.path.join(self.root_dir, file_name)).convert("RGB");
+
+        image = Image.open(os.path.join(self.root_dir, file_name)).convert("RGB")
         pixel_values = self.processor(image, return_tensors="pt").pixel_values
-        # add labels (input_ids) by encoding the text
-        labels = self.processor.tokenizer(text, 
-                                          padding="max_length", 
-                                          max_length=self.max_target_length).input_ids
-        # important: make sure that PAD tokens are ignored by the loss function
+
+        labels = self.processor.tokenizer(text, padding="max_length", max_length=self.max_target_length).input_ids
+
         labels = [label if label != self.processor.tokenizer.pad_token_id else -100 for label in labels]
 
         encoding = {"pixel_values": pixel_values.squeeze(), "labels": torch.tensor(labels)}
-        # print(encoding)
         return encoding
 
 
@@ -96,44 +94,55 @@ eval_dataset = IAMDataset(root_dir=root_dir,
                            df=test_df,
                            processor=processor)
 
-model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(encode, decode)
+model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(encode, decode, tie_word_embeddings = False)
 
-model.config.decoder_start_token_id = processor.tokenizer.cls_token_id
-model.config.pad_token_id = processor.tokenizer.pad_token_id
-print(f"processor.tokenizer.pad_token_id: {processor.tokenizer.pad_token_id}")
+bos_id = processor.tokenizer.cls_token_id
+eos_id = processor.tokenizer.sep_token_id
+pad_id = processor.tokenizer.pad_token_id
+
+model.config.decoder_start_token_id = bos_id
+model.config.eos_token_id = eos_id
+model.config.pad_token_id = pad_id
 model.config.vocab_size = model.config.decoder.vocab_size
-# config_decoder.is_decoder = True
-# config_decoder.add_cross_attention = True
 
 # set beam search parameters
 generation_config = GenerationConfig(
-    bos_token_id=processor.tokenizer.cls_token_id,
-    pad_token_id=processor.tokenizer.pad_token_id,
-    eos_token_id=processor.tokenizer.sep_token_id,
-    max_length=64,
-    early_stopping=True,
-    no_repeat_ngram_size=3,
-    length_penalty=2.0,
-    num_beams=4
+    bos_token_id = bos_id,
+    pad_token_id = pad_id,
+    eos_token_id = eos_id,
+    decoder_start_token_id = bos_id,
+
+    max_length = 64,
+    early_stopping = True,
+    no_repeat_ngram_size = 3,
+    length_penalty = 2.0,
+    num_beams = 4,
 )
 
 model.generation_config = generation_config
 
 
 training_args = Seq2SeqTrainingArguments(
-    num_train_epochs=50,
-    predict_with_generate=True,
-    eval_strategy="steps",
-    # per_device_train_batch_size=2,
-    # per_device_eval_batch_size=4,
-    output_dir="./checkpoints/",
-    per_device_train_batch_size=8,
-    per_device_eval_batch_size=4,
-    # output_dir="./",
-    logging_steps=2,
-    save_steps=2000,
-    eval_steps=100,
-    report_to= ['tensorboard']
+    num_train_epochs = 20,
+    predict_with_generate = True,
+    eval_strategy =  "steps",
+    output_dir = "./checkpoints/",
+
+    per_device_train_batch_size = 8, #16 for 5070Ti
+    fp16 = torch.cuda.is_available(), 
+    weight_decay = 0.01,
+    # gradient_accumulation_steps = 1, 
+    # gradient_checkpointing = True
+
+    learning_rate = 5e-4,
+    optim = "adamw_torch_fused",
+
+    per_device_eval_batch_size = 8, #16 for 5070Ti
+    logging_steps = 50,
+    save_steps = 100,
+    eval_steps = 50,
+    report_to = ['tensorboard'],
+    load_best_model_at_end = True
 )
 
 # LOGGIN STATS
@@ -145,16 +154,39 @@ eff_batch_size = training_args.per_device_train_batch_size * grad_accum
 
 total_steps = (len(train_dataset) // eff_batch_size) * training_args.num_train_epochs
 
+encoder_params = sum(p.numel() for p in model.encoder.parameters())
+decoder_params = sum(p.numel() for p in model.decoder.parameters())
+
+encoder_trainable = sum(p.numel() for p in model.encoder.parameters() if p.requires_grad)
+decoder_trainable = sum(p.numel() for p in model.decoder.parameters() if p.requires_grad)
+
+steps_per_epoch = len(train_dataset) // eff_batch_size
+print(f"\n{'='*30}")
+if torch.cuda.is_available(): 
+    print("GPU STATS:")
+    print("Current device: ", torch.cuda.current_device())
+    print("Cuda device count: ", torch.cuda.device_count())
+    print("Device Name: ", torch.cuda.get_device_name())
+
 print(f"\n{'='*30}")
 print(f"DATASET STATISTICS: ")
 print("Number of training examples:", len(train_dataset))
 print("Number of validation examples:", len(eval_dataset))
 print(f"\n{'='*30}")
+
 print(f"MODEL STATISTICS:")
 print(f"Total Parameters: {total_params:,}")
 print(f"Trainable Parameters: {trainable_params:,}")
 print(f"Effective Batch Size: {eff_batch_size}")
 print(f"Total Training Steps: {total_steps}")
+print("Steps per epoch: ", steps_per_epoch)
+print(f"{'='*30}")
+
+print("\nPARAMETER BREAKDOWN:")
+print(f"Encoder Total Params: {encoder_params:,}")
+print(f"Decoder Total Params: {decoder_params:,}")
+print(f"Encoder Trainable: {encoder_trainable:,}")
+print(f"Decoder Trainable: {decoder_trainable:,}")
 print(f"{'='*30}\n")
 # END LOGGIN STATS
 
@@ -181,7 +213,11 @@ trainer = Seq2SeqTrainer(
     data_collator=default_data_collator,
 )
 
-trainer.train()
+last_checkpoint = None
+if os.path.isdir(training_args.output_dir):
+    last_checkpoint = get_last_checkpoint(training_args.output_dir)
 
-os.makedirs("model/")
+trainer.train(resume_from_checkpoint = last_checkpoint)
+
+os.makedirs("model/", exist_ok = True)
 model.save_pretrained("model/")

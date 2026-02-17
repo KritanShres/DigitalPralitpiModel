@@ -1,1 +1,4 @@
 .vevn
+checkpoints
+logs
+.env
