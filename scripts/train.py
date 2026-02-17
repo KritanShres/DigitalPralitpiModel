@@ -1,6 +1,5 @@
 import os
-import time
-import shutil
+import json
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -94,11 +93,73 @@ eval_dataset = IAMDataset(root_dir=root_dir,
                            df=test_df,
                            processor=processor)
 
-model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(encode, decode)
-
 bos_id = processor.tokenizer.cls_token_id
 eos_id = processor.tokenizer.sep_token_id
 pad_id = processor.tokenizer.pad_token_id
+
+training_args = Seq2SeqTrainingArguments(
+    num_train_epochs = 20,
+    predict_with_generate = True,
+    eval_strategy =  "steps",
+    output_dir = "./checkpoints/",
+
+    per_device_train_batch_size = 8, #16 for 5070Ti
+    per_device_eval_batch_size = 4, #32 for 5070Ti: Eval is slower than training due to forward and backpass and shit
+    fp16 = torch.cuda.is_available(), 
+    weight_decay = 0.01,
+    gradient_accumulation_steps = 2, 
+    gradient_checkpointing = True,
+
+    learning_rate = 5e-4,
+    optim = "adamw_torch_fused",
+
+    logging_steps = 50,
+    save_steps = 1000,
+    eval_steps = 1000,
+    report_to = ['tensorboard'],
+    load_best_model_at_end = False,
+    save_total_limit = 3,
+)
+
+cer_metric = evaluate.load("cer")
+
+def compute_metrics(pred):
+    labels_ids = pred.label_ids
+    pred_ids = pred.predictions
+
+    pred_str = processor.batch_decode(pred_ids, skip_special_tokens=True)
+    labels_ids[labels_ids == -100] = processor.tokenizer.pad_token_id
+    label_str = processor.batch_decode(labels_ids, skip_special_tokens=True)
+
+    cer = cer_metric.compute(predictions=pred_str, references=label_str)
+    return {"cer": cer}
+
+last_checkpoint = None
+best_checkpoint = None
+if os.path.isdir(training_args.output_dir):
+    last_checkpoint = get_last_checkpoint(training_args.output_dir)
+
+    if last_checkpoint:
+        with open(f"{last_checkpoint}/trainer_state.json", "r") as f: 
+            state = json.load(f)
+
+        best_checkpoint = state.get('best_model_checkpoint', last_checkpoint)
+
+        print(f"{'='*30}")
+        print("FROM THE LAST CHECKPOINT LOGS")
+        print(f"Last step saved: {state['global_step']}")
+        print(f"Best metric so far: {state['best_metric']}")
+        print(f"Last checkpoint: {last_checkpoint}")
+        print(f"Best checkpoint: {best_checkpoint}")
+        print(f"Learning rate at save: {state['log_history'][-1]}")
+        print(f"{'='*30}\n")
+
+if last_checkpoint:
+    print(f"Resuming from checkpoint: {last_checkpoint}")
+    model = VisionEncoderDecoderModel.from_pretrained(last_checkpoint)
+else: 
+    print("No checkpoint found, training from scratch")
+    model = VisionEncoderDecoderModel.from_encoder_decoder_pretrained(encode, decode, tie_word_embeddings = False)
 
 model.config.decoder_start_token_id = bos_id
 model.config.eos_token_id = eos_id
@@ -107,7 +168,6 @@ model.config.vocab_size = model.config.decoder.vocab_size
 model.decoder.config.tie_word_embeddings = False
 
 model.config.use_cache = False
-
 # set beam search parameters
 generation_config = GenerationConfig(
     bos_token_id = bos_id,
@@ -123,31 +183,7 @@ generation_config = GenerationConfig(
 
     use_cache = False
 )
-
 model.generation_config = generation_config
-
-training_args = Seq2SeqTrainingArguments(
-    num_train_epochs = 20,
-    predict_with_generate = True,
-    eval_strategy =  "steps",
-    output_dir = "./checkpoints/",
-
-    per_device_train_batch_size = 8, #16 for 5070Ti
-    per_device_eval_batch_size = 16, #32 for 5070Ti: Eval is slower than training due to forward and backpass and shit
-    fp16 = torch.cuda.is_available(), 
-    weight_decay = 0.01,
-    gradient_accumulation_steps = 2, 
-    gradient_checkpointing = True,
-
-    learning_rate = 5e-4,
-    optim = "adamw_torch_fused",
-
-    logging_steps = 50,
-    save_steps = 1000,
-    eval_steps = 1000,
-    report_to = ['tensorboard'],
-    load_best_model_at_end = True
-)
 
 # LOGGING STATS
 total_params = sum(p.numel() for p in model.parameters())
@@ -209,21 +245,7 @@ print(f"Encoder/Decoder Param Ratio: {enc_dec_ratio:.2f}x")
 print(f"Frozen Parameters: {frozen_params:,}")
 print(f"Trainable %: {100 * trainable_params / total_params:.1f}%")
 print(f"{'='*30}\n")
-
 # END LOGGIN STATS
-
-cer_metric = evaluate.load("cer")
-
-def compute_metrics(pred):
-    labels_ids = pred.label_ids
-    pred_ids = pred.predictions
-
-    pred_str = processor.batch_decode(pred_ids, skip_special_tokens=True)
-    labels_ids[labels_ids == -100] = processor.tokenizer.pad_token_id
-    label_str = processor.batch_decode(labels_ids, skip_special_tokens=True)
-
-    cer = cer_metric.compute(predictions=pred_str, references=label_str)
-    return {"cer": cer}
 
 trainer = Seq2SeqTrainer(
     model=model,
@@ -234,10 +256,6 @@ trainer = Seq2SeqTrainer(
     eval_dataset=eval_dataset,
     data_collator=default_data_collator,
 )
-
-last_checkpoint = None
-if os.path.isdir(training_args.output_dir):
-    last_checkpoint = get_last_checkpoint(training_args.output_dir)
 
 trainer.train(resume_from_checkpoint = last_checkpoint)
 
