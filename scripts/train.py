@@ -1,4 +1,5 @@
 import os
+import time
 import shutil
 import numpy as np
 import pandas as pd
@@ -139,55 +140,73 @@ training_args = Seq2SeqTrainingArguments(
 
     per_device_eval_batch_size = 8, #16 for 5070Ti
     logging_steps = 50,
-    save_steps = 100,
-    eval_steps = 50,
+    save_steps = 1000,
+    eval_steps = 1000,
     report_to = ['tensorboard'],
     load_best_model_at_end = True
 )
 
-# LOGGIN STATS
+# LOGGING STATS
 total_params = sum(p.numel() for p in model.parameters())
 trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 grad_accum = training_args.gradient_accumulation_steps if training_args.gradient_accumulation_steps else 1
 eff_batch_size = training_args.per_device_train_batch_size * grad_accum 
-
 total_steps = (len(train_dataset) // eff_batch_size) * training_args.num_train_epochs
+estimated_seconds = total_steps * 0.5
+steps_per_epoch = len(train_dataset) // eff_batch_size
+estimate_hours = estimated_seconds / 3600 
 
 encoder_params = sum(p.numel() for p in model.encoder.parameters())
 decoder_params = sum(p.numel() for p in model.decoder.parameters())
-
 encoder_trainable = sum(p.numel() for p in model.encoder.parameters() if p.requires_grad)
 decoder_trainable = sum(p.numel() for p in model.decoder.parameters() if p.requires_grad)
 
-steps_per_epoch = len(train_dataset) // eff_batch_size
-print(f"\n{'='*30}")
+frozen_params = total_params - trainable_params
+enc_dec_ratio = encoder_params / decoder_params
+sample_lengths = [len(processor.tokenizer(str(t)).input_ids) for t in train_df['text'].sample(200)]
+
+print(f"{'='*30}")
 if torch.cuda.is_available(): 
     print("GPU STATS:")
     print("Current device: ", torch.cuda.current_device())
     print("Cuda device count: ", torch.cuda.device_count())
     print("Device Name: ", torch.cuda.get_device_name())
 
-print(f"\n{'='*30}")
+print(f"{'='*30}")
 print(f"DATASET STATISTICS: ")
 print("Number of training examples:", len(train_dataset))
 print("Number of validation examples:", len(eval_dataset))
-print(f"\n{'='*30}")
 
+print(f"{'='*30}")
 print(f"MODEL STATISTICS:")
 print(f"Total Parameters: {total_params:,}")
+print(f"Estimated Training Time: {estimate_hours: .1f} hours")
 print(f"Trainable Parameters: {trainable_params:,}")
 print(f"Effective Batch Size: {eff_batch_size}")
 print(f"Total Training Steps: {total_steps}")
 print("Steps per epoch: ", steps_per_epoch)
-print(f"{'='*30}")
 
+print(f"{'='*30}")
+print("DATASET TOKEN COVERAGE: ")
+print(f"Avg Token Length (sample): {np.mean(sample_lengths):.1f}")
+print(f"Max Token Length (sample): {np.max(sample_lengths)}")
+print(f"Sequences exceeding max_length (128): {sum(l > 128 for l in sample_lengths)}")
+
+print(f"{'='*30}")
 print("\nPARAMETER BREAKDOWN:")
 print(f"Encoder Total Params: {encoder_params:,}")
 print(f"Decoder Total Params: {decoder_params:,}")
 print(f"Encoder Trainable: {encoder_trainable:,}")
 print(f"Decoder Trainable: {decoder_trainable:,}")
+
+print(f"{'='*30}")
+print("CROSS-ARCHITECTURE PARAMTER RATIO")
+print(f"Encoder/Decoder Param Ratio: {enc_dec_ratio:.2f}x")
+print(f"Frozen Parameters: {frozen_params:,}")
+print(f"Trainable %: {100 * trainable_params / total_params:.1f}%")
 print(f"{'='*30}\n")
+
 # END LOGGIN STATS
 
 cer_metric = evaluate.load("cer")
