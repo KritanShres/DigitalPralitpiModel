@@ -81,8 +81,8 @@ training_args = Seq2SeqTrainingArguments(
     eval_strategy =  "steps",
     output_dir = "./checkpoints/",
 
-    per_device_train_batch_size = 8,
-    per_device_eval_batch_size = 16,
+    per_device_train_batch_size = 8, #16 
+    per_device_eval_batch_size = 16, #32 
     fp16 = torch.cuda.is_available(),
     weight_decay = 0.01,
     gradient_accumulation_steps = 2,
@@ -94,8 +94,8 @@ training_args = Seq2SeqTrainingArguments(
     optim = "adamw_torch_fused",
 
     logging_steps = 50,
-    save_steps = 1000,
-    eval_steps = 1000,
+    save_steps = 1000, # 2000
+    eval_steps = 1000, # 2000
     report_to = ['tensorboard'],
     load_best_model_at_end = False,
     save_total_limit = 3,
@@ -165,15 +165,6 @@ if os.path.isdir(training_args.output_dir):
                 state = json.load(f)
 
             best_checkpoint = state.get('best_model_checkpoint', last_checkpoint)
-
-            print(f"{'='*30}")
-            print("FROM THE LAST CHECKPOINT LOGS")
-            print(f"Last step saved: {state['global_step']}")
-            print(f"Best metric so far: {state['best_metric']}")
-            print(f"Last checkpoint: {last_checkpoint}")
-            print(f"Best checkpoint: {best_checkpoint}")
-            print(f"Learning rate at save: {state['log_history'][-1]}")
-            print(f"{'='*30}\n")
         else:
             last_checkpoint = None
 
