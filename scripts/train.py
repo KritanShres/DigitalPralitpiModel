@@ -185,7 +185,6 @@ model.config.pad_token_id = pad_id
 model.config.vocab_size = model.config.decoder.vocab_size
 model.decoder.config.tie_word_embeddings = False
 model.config.use_cache = False
-
 # ===========================
 # GENERATION CONFIG
 # ===========================
@@ -200,10 +199,9 @@ generation_config = GenerationConfig(
     no_repeat_ngram_size = 3,
     length_penalty = 2.0,
     num_beams = 4,
-
-    use_cache = False
 )
 model.generation_config = generation_config
+model.generation_config.use_cache = False
 
 # ===========================
 # LOGGING MODEL & DATA STATS
