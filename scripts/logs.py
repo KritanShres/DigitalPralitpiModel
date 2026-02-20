@@ -54,6 +54,16 @@ def log_training_stats(
     total_steps = steps_per_epoch * training_args.num_train_epochs
     estimated_seconds = total_steps * seconds_per_step_estimate
     estimate_hours = estimated_seconds / 3600
+    eval_batch_size = training_args.per_device_eval_batch_size
+    eval_steps_per_eval = len(eval_dataset) // eval_batch_size
+    num_evals = total_steps // (training_args.eval_steps or total_steps)
+    seconds_per_eval_step_estimate = 1.0  # can adjust based on your GPU speed
+
+    estimated_eval_seconds = num_evals * eval_steps_per_eval * seconds_per_eval_step_estimate
+
+    estimated_total_seconds = estimated_seconds + estimated_eval_seconds
+    estimated_total_hours = estimated_total_seconds / 3600
+
 
     print(f"Total parameters:        {total_params:,}")
     print(f"Trainable parameters:    {trainable_params:,}")
@@ -74,6 +84,9 @@ def log_training_stats(
     print(f"Total training steps:    {total_steps}")
     print(f"Estimated training time: {estimate_hours:.2f} hours "
           f"(assuming {seconds_per_step_estimate}s per step)")
+    print(f"Estimated training time only: {estimated_seconds / 3600:.2f} hours")
+    print(f"Estimated evaluation time:    {estimated_eval_seconds / 3600:.2f} hours")
+    print(f"Estimated total training+eval: {estimated_total_hours:.2f} hours")
 
     if processor is not None and train_df is not None and text_column in train_df.columns:
         print("\n" + "=" * 40)

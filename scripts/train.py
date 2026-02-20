@@ -90,15 +90,18 @@ training_args = Seq2SeqTrainingArguments(
 
     num_train_epochs = 20,
     predict_with_generate = True,
-    learning_rate = 5e-4,
+    learning_rate = 5e-5,
     optim = "adamw_torch_fused",
 
     logging_steps = 50,
-    save_steps = 1000, # 2000
+    save_steps = 2000, # 2000
     eval_steps = 1000, # 2000
     report_to = ['tensorboard'],
-    load_best_model_at_end = False,
+    load_best_model_at_end = True,
     save_total_limit = 3,
+
+    metric_for_best_model= "cer",
+    greater_is_better = False
 )
 
 # ===========================
