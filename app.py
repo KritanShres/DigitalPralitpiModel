@@ -1,8 +1,10 @@
 """
 app.py -- Digital Pratilipi: Nepali Handwritten OCR
-Kantipur Engineering College -- CT 755 Major Project  v8
+Kantipur Engineering College -- CT 755 Major Project  v9
 
 Architecture (proven by profiling real images):
+  PREPROCESSING   : Sharpening → Grayscale → Binarization (Otsu) → Skew Correction
+                    (HoughLinesP-based, imported from preprocessing pipeline v2)
   LINE DETECTION  : Connected Component Y-centroid clustering
   WORD DETECTION  : VPP (Vertical Projection Profile) per line band
   SPELL CORRECT   : Large vocabulary from nepali-bhasa/nepali-spell
@@ -48,6 +50,14 @@ Vocabulary / spell-correction upgrade (v8):
     equal.  The distance is counted over Unicode code-points, not bytes,
     which is correct for Devanagari (each akshara = one or more
     code-points but we want akshara-level edits, not byte-level).
+
+Preprocessing pipeline (v2):
+  Replaces the old bilateral-filter + Sauvola + rolling-ball pipeline
+  with a cleaner four-stage approach:
+    1. Sharpening        — 3×3 unsharp kernel via cv2.filter2D
+    2. Grayscale         — BGR → single channel
+    3. Binarization      — Otsu's global threshold (ink = WHITE / 255)
+    4. Skew correction   — HoughLinesP angle estimation + warpAffine
 """
 
 import os, base64, logging, re, unicodedata
@@ -68,6 +78,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent
 TROCR_MODEL  = os.getenv("TROCR_MODEL", str(PROJECT_ROOT / "model"))
 
+
 # Paths to the nepali-bhasa/nepali-spell vocabulary files.
 # Override at runtime with the NEPALI_VOCAB_DIR env-var if needed.
 _DEFAULT_VOCAB_DIR = PROJECT_ROOT / "data"
@@ -78,86 +89,148 @@ VOCAB_CORPUS_FILE     = VOCAB_DIR / "vocabulary-corpus"
 
 
 # ============================================================
-# PREPROCESSING
+# PREPROCESSING  (pipeline v2)
+# ============================================================
+# Four-stage pipeline:
+#   sharpen → grayscale → Otsu binarize → HoughLinesP skew correction
+#
+# This replaces the previous rolling-ball / bilateral / Sauvola pipeline
+# with a simpler, faster, and more robust approach that proved more
+# reliable on the IIIT-HW-Hindi dataset used for evaluation.
 # ============================================================
 
-def _remove_background(gray: np.ndarray) -> np.ndarray:
-    """Safe rolling-ball: clamp bg so it never exceeds pixel value."""
-    bg = cv2.GaussianBlur(gray, (0, 0), sigmaX=50)
-    bg_safe = np.minimum(bg, gray)
-    out = cv2.addWeighted(gray, 1.0, bg_safe.astype(np.uint8), -1.0, 128)
-    return np.clip(out, 20, 235).astype(np.uint8)
+def _sharpen(image: np.ndarray) -> np.ndarray:
+    """Apply a 3×3 sharpening kernel via 2D convolution."""
+    kernel = np.array([
+        [ 0, -1,  0],
+        [-1,  5, -1],
+        [ 0, -1,  0]
+    ], dtype=np.float32)
+    return cv2.filter2D(image, ddepth=-1, kernel=kernel)
 
 
-def _sauvola_binarize(gray: np.ndarray,
-                      window: int = 25, k: float = 0.15) -> np.ndarray:
-    """Sauvola local binarisation. INK = WHITE (255)."""
-    f   = gray.astype(np.float32)
-    m   = cv2.boxFilter(f, -1, (window, window))
-    m2  = cv2.boxFilter(f * f, -1, (window, window))
-    std = np.sqrt(np.maximum(m2 - m * m, 0))
-    thr = m * (1.0 + k * (std / 128.0 - 1.0))
-    return np.where(f < thr, 255, 0).astype(np.uint8)
+def _to_grayscale(image: np.ndarray) -> np.ndarray:
+    """Convert RGB/BGR image to grayscale. Returns unchanged if already single-channel."""
+    if image.ndim == 2 or (image.ndim == 3 and image.shape[2] == 1):
+        return image.squeeze()
+    return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
 
 
-def _remove_large_blobs(binary: np.ndarray, max_frac: float = 0.03) -> np.ndarray:
-    """Remove blobs covering > max_frac of image area (vignette artifacts)."""
-    max_area = int(binary.shape[0] * binary.shape[1] * max_frac)
-    n, labels, stats, _ = cv2.connectedComponentsWithStats(binary, connectivity=8)
-    out = binary.copy()
-    for i in range(1, n):
-        if stats[i, cv2.CC_STAT_AREA] > max_area:
-            out[labels == i] = 0
-    return out
+def _binarize_otsu(gray: np.ndarray) -> np.ndarray:
+    """
+    Apply Otsu's global thresholding to produce a binary image.
+    INK = WHITE (255), background = 0  — consistent with rest of pipeline.
+    """
+    assert gray.ndim == 2, "Input must be a single-channel grayscale image."
+    _, binary = cv2.threshold(
+        gray, 0, 255,
+        cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU   # INV so ink → 255
+    )
+    return binary
+
+
+def _correct_skew(binary: np.ndarray) -> tuple[np.ndarray, float]:
+    """
+    Detect skew via Probabilistic Hough Line Transform (HoughLinesP)
+    and rotate the image to correct it.
+
+    Uses HoughLinesP (probabilistic variant) rather than the classical
+    HoughLines used in v1 — it is faster and more robust on sparse ink.
+
+    Returns (corrected_binary, skew_angle_degrees).
+    """
+    assert binary.ndim == 2, "Input must be a single-channel binary image."
+
+    inverted = cv2.bitwise_not(binary)
+    edges    = cv2.Canny(inverted, 50, 150, apertureSize=3)
+    lines    = cv2.HoughLinesP(
+        edges,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=80,
+        minLineLength=50,
+        maxLineGap=10,
+    )
+
+    skew_angle = 0.0
+    if lines is not None:
+        angles = []
+        for line in lines:
+            x1, y1, x2, y2 = line[0]
+            dx, dy = x2 - x1, y2 - y1
+            if dx == 0:
+                continue
+            angle_deg = np.degrees(np.arctan2(dy, dx))
+            if -45 <= angle_deg <= 45:
+                angles.append(angle_deg)
+        if angles:
+            skew_angle = float(np.median(angles))
+
+    h, w   = binary.shape
+    center = (w / 2.0, h / 2.0)
+    M      = cv2.getRotationMatrix2D(center, skew_angle, scale=1.0)
+    corrected = cv2.warpAffine(
+        binary, M, (w, h),
+        flags=cv2.INTER_CUBIC,
+        borderMode=cv2.BORDER_REPLICATE,
+    )
+    return corrected, skew_angle
 
 
 def preprocess(pil_image: Image.Image) -> tuple[np.ndarray, np.ndarray]:
     """
-    1. Upscale to >= 960px wide
-    2. Bilateral denoise + sharpen
-    3. Safe BG removal → CLAHE → Sauvola binarize
-    4. Remove large artifact blobs
-    5. Morphological open + close
-    6. Hough skew correction
+    Four-stage preprocessing pipeline (v2):
+      1. Upscale to >= 960px wide  (unchanged from v1 for OCR quality)
+      2. Sharpen  — 3×3 unsharp kernel
+      3. Grayscale conversion
+      4. Otsu binarization          (ink = WHITE / 255)
+      5. HoughLinesP skew correction
+
     Returns (colour_bgr, binary_ink_white).
+
+    The colour image returned is the sharpened BGR image (before
+    grayscale), so bounding-box visualisations still render in colour.
+    The binary image is ink-white / background-black, matching the
+    convention expected by _find_line_bands and _find_words_in_band.
     """
     img_bgr = cv2.cvtColor(np.array(pil_image.convert("RGB")),
                             cv2.COLOR_RGB2BGR)
+
+    # Upscale if too small (keeps OCR quality on low-res scans)
     h, w = img_bgr.shape[:2]
     if w < 960:
-        s = 960 / w
-        img_bgr = cv2.resize(img_bgr, (int(w*s), int(h*s)),
+        scale   = 960 / w
+        img_bgr = cv2.resize(img_bgr,
+                             (int(w * scale), int(h * scale)),
                              interpolation=cv2.INTER_CUBIC)
 
-    den  = cv2.bilateralFilter(img_bgr, 9, 75, 75)
-    shr  = cv2.filter2D(den, -1,
-                        np.array([[0,-1,0],[-1,5,-1],[0,-1,0]], np.float32))
-    gray = cv2.cvtColor(shr, cv2.COLOR_BGR2GRAY)
+    # Stage 1 — Sharpening (operates on colour image)
+    sharpened = _sharpen(img_bgr)
 
-    eq     = cv2.createCLAHE(3.0, (8,8)).apply(_remove_background(gray))
-    binary = _sauvola_binarize(eq)
-    binary = _remove_large_blobs(binary)
-    nk     = cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2))
-    binary = cv2.morphologyEx(binary, cv2.MORPH_OPEN,  nk)
-    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, nk)
+    # Stage 2 — Grayscale
+    gray = _to_grayscale(sharpened)
 
-    # Skew correction
-    edges = cv2.Canny(cv2.bitwise_not(binary), 50, 150, apertureSize=3)
-    lines = cv2.HoughLines(edges, 1, np.pi/180, threshold=100)
-    if lines is not None:
-        angles = [(l[0][1] - np.pi/2)*180/np.pi for l in lines]
-        skew   = float(np.median(angles))
-        if 1.0 < abs(skew) < 15:
-            h2, w2 = img_bgr.shape[:2]
-            M = cv2.getRotationMatrix2D((w2/2, h2/2), skew, 1.0)
-            img_bgr = cv2.warpAffine(img_bgr, M, (w2,h2),
-                                     flags=cv2.INTER_CUBIC,
-                                     borderMode=cv2.BORDER_REPLICATE)
-            binary  = cv2.warpAffine(binary, M, (w2,h2),
-                                     flags=cv2.INTER_NEAREST,
-                                     borderMode=cv2.BORDER_CONSTANT,
-                                     borderValue=0)
-    return img_bgr, binary
+    # Stage 3 — Otsu binarization
+    binary = _binarize_otsu(gray)
+
+    # Stage 4 — Skew correction (applied to both colour and binary)
+    binary_corrected, skew_angle = _correct_skew(binary)
+
+    if abs(skew_angle) > 0.5:
+        h2, w2 = sharpened.shape[:2]
+        M = cv2.getRotationMatrix2D((w2 / 2.0, h2 / 2.0), skew_angle, 1.0)
+        img_bgr = cv2.warpAffine(
+            sharpened, M, (w2, h2),
+            flags=cv2.INTER_CUBIC,
+            borderMode=cv2.BORDER_REPLICATE,
+        )
+    else:
+        img_bgr = sharpened
+
+    logger.info(f"preprocess: {img_bgr.shape[1]}×{img_bgr.shape[0]}px  "
+                f"skew={skew_angle:.2f}°")
+
+    return img_bgr, binary_corrected
 
 
 # ============================================================
@@ -337,13 +410,10 @@ def detect_words(img_bgr: np.ndarray,
     Returns (flat_boxes, line_groups).
     """
     if binary is None:
-        gray   = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2GRAY)
-        eq     = cv2.createCLAHE(3.0,(8,8)).apply(_remove_background(gray))
-        binary = _sauvola_binarize(eq)
-        binary = _remove_large_blobs(binary)
-        nk     = cv2.getStructuringElement(cv2.MORPH_RECT,(2,2))
-        binary = cv2.morphologyEx(binary,cv2.MORPH_OPEN,nk)
-        binary = cv2.morphologyEx(binary,cv2.MORPH_CLOSE,nk)
+        # Re-run preprocessing stages on the colour image if no binary given
+        gray   = _to_grayscale(img_bgr)
+        binary = _binarize_otsu(gray)
+        binary, _ = _correct_skew(binary)
 
     img_h, img_w = binary.shape
 
@@ -794,11 +864,19 @@ def run_pipeline(pil_image: Image.Image, speak=False) -> dict:
     line_count = len(line_groups)
     word_count = len(boxes)
 
+    # Encode the Otsu binary image for the frontend "Preprocessed" tab.
+    # Convert ink-white binary (ink=255) back to a viewable image:
+    #   invert so ink is black on white (standard document look),
+    #   then encode as PNG (lossless — important for binary images).
+    binary_display = cv2.bitwise_not(binary)          # ink → black
+    _, bin_buf = cv2.imencode(".png", binary_display)
+    binary_b64 = base64.b64encode(bin_buf.tobytes()).decode()
+
     if not boxes:
         return {"raw_text":"","final_text":"","corrections":[],
                 "word_count":0,"regions":0,"audio_url":None,
                 "lines":[],"method":"none",
-                "viz_b64":viz_b64,"line_count":0}
+                "viz_b64":viz_b64,"binary_b64":binary_b64,"line_count":0}
 
     proc, _ = get_trocr()
     rec_lines = []
@@ -823,7 +901,8 @@ def run_pipeline(pil_image: Image.Image, speak=False) -> dict:
             "word_count":len(final.split()),"regions":word_count,
             "lines":[" ".join(wl) for wl in rec_lines],
             "audio_url":audio,"method":method,
-            "viz_b64":viz_b64,"line_count":line_count}
+            "viz_b64":viz_b64,"binary_b64":binary_b64,"line_count":line_count}
+
 
 
 # ============================================================
@@ -840,12 +919,13 @@ def health():
     p, _ = get_trocr()
     vocab = _get_vocab()
     return jsonify({
-        "status":   "ok",
-        "trocr":    p is not None,
-        "easyocr":  _easyocr_reader is not None,
-        "vocab_size": len(vocab),
-        "bktree_ready": _BK_TREE is not None,
+        "status":        "ok",
+        "trocr":         p is not None,
+        "easyocr":       _easyocr_reader is not None,
+        "vocab_size":    len(vocab),
+        "bktree_ready":  _BK_TREE is not None,
     })
+
 
 @app.route("/ocr", methods=["POST"])
 @app.route("/ocr_full", methods=["POST"])
@@ -937,7 +1017,7 @@ def vocab_check():
 
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("  Digital Pratilipi OCR  v8  [CC+VPP+BKTree]")
+    print("  Digital Pratilipi OCR  v9  [CC+VPP+BKTree+TrOCR]")
     print("="*60)
     print(f"  TROCR_MODEL    : {TROCR_MODEL}")
     print(f"  VOCAB_DIR      : {VOCAB_DIR}")
