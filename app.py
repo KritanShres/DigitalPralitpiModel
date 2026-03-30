@@ -58,6 +58,12 @@ Preprocessing pipeline (v2):
     2. Grayscale         — BGR → single channel
     3. Binarization      — Otsu's global threshold (ink = WHITE / 255)
     4. Skew correction   — HoughLinesP angle estimation + warpAffine
+
+Detection visualisation (v9 update):
+  Bounding boxes are now drawn on the preprocessed binary image
+  (converted to black-ink-on-white BGR) rather than the original colour
+  image.  This makes word segmentation boundaries much easier to inspect
+  because there is no colour noise or background texture behind the boxes.
 """
 
 import os, base64, logging, re, unicodedata
@@ -837,11 +843,26 @@ def speak_nepali(text, path="output_audio.mp3"):
 # ============================================================
 
 def _render_detection_viz(img_bgr: np.ndarray,
-                          line_groups: list) -> str:
+                          line_groups: list,
+                          binary: np.ndarray = None) -> str:
     """
-    Draw coloured bounding boxes on the image and return as base64 JPEG.
+    Draw coloured bounding boxes on the preprocessed binary image
+    (preferred) or the colour image (fallback) and return as base64 JPEG.
+
+    When binary is provided (the Otsu-binarized, skew-corrected image):
+      - It is inverted so ink becomes black on a white background
+        (standard document appearance) and converted to BGR so OpenCV
+        can draw coloured boxes on top of it.
+    This makes word segmentation boundaries much easier to inspect
+    because there is no colour noise or background texture.
     """
-    vis    = img_bgr.copy()
+    if binary is not None:
+        # Invert: ink-white (255) → ink-black (0), background → white (255)
+        # Then convert single-channel to BGR so coloured boxes are visible.
+        vis = cv2.cvtColor(cv2.bitwise_not(binary), cv2.COLOR_GRAY2BGR)
+    else:
+        vis = img_bgr.copy()
+
     COLORS = [(60,200,100),(60,160,220),(220,80,60),
               (220,160,40),(180,60,220),(40,200,200)]
     for li, line in enumerate(line_groups):
@@ -860,7 +881,9 @@ def run_pipeline(pil_image: Image.Image, speak=False) -> dict:
     img_bgr, binary = preprocess(pil_image)
     boxes, line_groups = detect_words(img_bgr, binary=binary)
 
-    viz_b64    = _render_detection_viz(img_bgr, line_groups)
+    # Draw bounding boxes on the preprocessed binary image (not the colour image)
+    # so the detection tab shows clean black-on-white segmentation.
+    viz_b64    = _render_detection_viz(img_bgr, line_groups, binary=binary)
     line_count = len(line_groups)
     word_count = len(boxes)
 
@@ -967,20 +990,11 @@ def detect_viz():
         img_bgr, binary = preprocess(pil)
         boxes, line_groups = detect_words(img_bgr, binary=binary)
 
-        vis = img_bgr.copy()
-        COLORS = [(60,200,100),(60,160,220),(220,80,60),
-                  (220,160,40),(180,60,220),(40,200,200)]
-        for li, line in enumerate(line_groups):
-            col = COLORS[li % len(COLORS)]
-            for wi, box in enumerate(line):
-                x, y, w, h = box["x"], box["y"], box["w"], box["h"]
-                cv2.rectangle(vis, (x,y), (x+w,y+h), col, 2)
-                cv2.putText(vis, f"L{li+1}W{wi+1}", (x, max(y-4,14)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.45, col, 1, cv2.LINE_AA)
+        # Draw bounding boxes on the preprocessed binary image (not colour)
+        image_b64 = _render_detection_viz(img_bgr, line_groups, binary=binary)
 
-        _, buf = cv2.imencode(".jpg", vis, [cv2.IMWRITE_JPEG_QUALITY, 90])
         return jsonify({
-            "image_b64":  base64.b64encode(buf.tobytes()).decode(),
+            "image_b64":  image_b64,
             "word_count": len(boxes),
             "line_count": len(line_groups),
             "boxes": [{"x":b["x"],"y":b["y"],"w":b["w"],"h":b["h"]}

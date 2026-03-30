@@ -212,16 +212,7 @@ footer{border-top:1px solid var(--warm);padding:11px 34px;display:flex;justify-c
   <div>
     <div class="hero-title">Handwritten Nepali<br/><span>→ Digital Text</span></div>
     <div class="hero-sub">Handwritten Nepali · Digital Conversion · Voice Output</div>
-    <div class="hbadges">
-      <span class="hb on">Line Detection</span>
-      <span class="hb on">Word Segmentation</span>
-      <span class="hb on">OCR Recognition</span>
-      <span class="hb on">Image Editor</span>
-      <span class="hb on">Spell Correction</span>
-      <span class="hb on">Nepali TTS</span>
-    </div>
   </div>
-  <div class="hero-stat"><div class="sn" id="cer-stat">~9%</div><div class="sl">CER</div></div>
 </div>
 
 <!-- ═══════ OCR VIEW ═══════ -->
@@ -264,7 +255,7 @@ footer{border-top:1px solid var(--warm);padding:11px 34px;display:flex;justify-c
 
   <!-- COL 2: Editor + Detection -->
   <div class="panel">
-    <div class="ptitle">2 · Edit Image</div>
+    <div class="ptitle">2 · Preprocessing + Detection Preview</div>
     <div id="crop-indicator">✂ Crop Mode — drag to select region</div>
 
     <div id="editor-canvas-wrap">
@@ -330,18 +321,6 @@ footer{border-top:1px solid var(--warm);padding:11px 34px;display:flex;justify-c
       <button class="btn btn-out btn-sm" onclick="copyText()">📋 Copy</button>
       <button class="btn btn-out btn-sm" onclick="dlTxt()">💾 .txt</button>
       <button class="btn btn-sm btn-gr" id="speak-btn" onclick="speakNow()" disabled>♪ Speak</button>
-      <span class="badge" id="cer-badge">CER: ~9%</span>
-    </div>
-
-    <div class="cards">
-      <div class="card">
-        <h4>Recognition</h4>
-        <p><span class="tag">OCR Model</span><span class="tag g">Fine-tuned Nepali</span></p>
-      </div>
-      <div class="card">
-        <h4>Correction</h4>
-        <p><span class="tag g">Spell Check</span><span class="tag">75k Vocab</span></p>
-      </div>
     </div>
   </div>
 
