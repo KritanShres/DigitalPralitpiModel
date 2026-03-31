@@ -87,7 +87,7 @@ nav button:hover,nav button.active{background:var(--red);border-color:var(--red)
 .opt.on{background:var(--ink);color:var(--paper);border-color:var(--ink);}
 
 /* ─── Pipeline steps ─── */
-
+.pipeline{display:flex;flex-direction:column;gap:4px;margin-top:13px;}
 .step{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:var(--r);background:var(--cream);border-left:3px solid var(--warm);transition:var(--tr);}
 .step.active{border-left-color:var(--gold);background:#fdf6e3;}
 .step.done  {border-left-color:var(--green);background:#f0fff4;}
@@ -243,6 +243,45 @@ footer{border-top:1px solid var(--warm);padding:11px 34px;display:flex;justify-c
     <div class="opts">
       <div class="opt on" id="opt-spell" onclick="toggleOpt(this,'spell')">✓ Spell Fix</div>
       <div class="opt" id="opt-tts" onclick="toggleOpt(this,'tts')">♪ Voice</div>
+    </div>
+
+    <div class="pipeline">
+      <div class="ptitle" style="margin-top:13px">Pipeline</div>
+      <div class="step" id="s-up">
+        <span class="si">📤</span>
+        <span class="sl">Upload &amp; Edit</span>
+        <span class="ss">Waiting</span>
+      </div>
+      <div class="step" id="s-pre">
+        <span class="si">🔬</span>
+        <span class="sl">Preprocess (CLAHE + Sauvola Binarize)</span>
+        <span class="ss">Waiting</span>
+      </div>
+      <div class="step" id="s-det">
+        <span class="si">📐</span>
+        <span class="sl">CC Clustering — Line Detection</span>
+        <span class="ss">Waiting</span>
+      </div>
+      <div class="step" id="s-vpp">
+        <span class="si">✂</span>
+        <span class="sl">VPP — Word Segmentation</span>
+        <span class="ss">Waiting</span>
+      </div>
+      <div class="step" id="s-rec">
+        <span class="si">🤖</span>
+        <span class="sl">TrOCR — Nepali Recognition</span>
+        <span class="ss">Waiting</span>
+      </div>
+      <div class="step" id="s-pp">
+        <span class="si">✍️</span>
+        <span class="sl">NFC + Spell Correction</span>
+        <span class="ss">Waiting</span>
+      </div>
+      <div class="step skip" id="s-tts">
+        <span class="si">♪</span>
+        <span class="sl">gTTS — Nepali Voice</span>
+        <span class="ss">Skipped</span>
+      </div>
     </div>
 
     <div class="stats">
@@ -409,6 +448,11 @@ checkBackend();
 function toggleOpt(el, key) {
   opts[key] = !opts[key];
   el.classList.toggle("on", opts[key]);
+  if (key === "tts") {
+    const s = document.getElementById("s-tts");
+    s.className = "step" + (opts[key] ? "" : " skip");
+    s.querySelector(".ss").textContent = opts[key] ? "Queued" : "Skipped";
+  }
 }
 
 // ─── Drop zone ───────────────────────────────────────
@@ -473,7 +517,6 @@ function drawEditor() {
   const maxH = 250;
 
   if (preprocessedB64) {
-    // ── After OCR: show the actual preprocessed binary from the backend ──
     const preImg = new Image();
     preImg.onload = () => {
       canvas.width  = Math.round(Math.min(maxW, preImg.naturalWidth));
@@ -483,7 +526,6 @@ function drawEditor() {
     };
     preImg.src = "data:image/png;base64," + preprocessedB64;
   } else {
-    // ── Before OCR: show the upload with fixed max brightness + contrast ──
     const src = getTransformedCanvas();
     let sx = 0, sy = 0, sw = src.width, sh = src.height;
     if (cropApplied) { sx=cropApplied.x; sy=cropApplied.y; sw=cropApplied.w; sh=cropApplied.h; }
@@ -496,17 +538,11 @@ function drawEditor() {
   }
 }
 
-// Render the full-resolution processed image (with brightness/contrast baked in)
-// into a temporary off-screen canvas and commit it as editedBlob.
-// Called whenever the image or any edit changes so runOCR always gets
-// the same image the user is seeing, not the original upload.
 function _measureCanvasLuminance(srcCanvas) {
-  // Sample every 8th pixel for speed
   const sCtx = srcCanvas.getContext("2d");
   const d = sCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height).data;
   let sum = 0, count = 0;
-  for (let i = 0; i < d.length; i += 32) {  // step=8px → 32 bytes
-    // Rec. 709 luminance
+  for (let i = 0; i < d.length; i += 32) {
     sum += 0.2126 * d[i] + 0.7152 * d[i+1] + 0.0722 * d[i+2];
     count++;
   }
@@ -514,14 +550,10 @@ function _measureCanvasLuminance(srcCanvas) {
 }
 
 function _adaptiveFilter(meanLum) {
-  // Map luminance → (brightness multiplier, contrast multiplier)
-  // Very dark image  (mean < 60):  needs moderate boost
-  // Typical image   (60-160):     slight touch-up
-  // Already bright  (> 160):      no boost at all
   if (meanLum < 60)  return { b: 1.4, c: 1.5 };
   if (meanLum < 110) return { b: 1.2, c: 1.3 };
   if (meanLum < 160) return { b: 1.05, c: 1.1 };
-  return              { b: 1.0,  c: 1.0 };   // leave bright images alone
+  return              { b: 1.0,  c: 1.0 };
 }
 
 function commitEditedBlob() {
@@ -530,14 +562,12 @@ function commitEditedBlob() {
   let sx = 0, sy = 0, sw = src.width, sh = src.height;
   if (cropApplied) { sx=cropApplied.x; sy=cropApplied.y; sw=cropApplied.w; sh=cropApplied.h; }
 
-  // Measure luminance on the (possibly cropped) region
   const measureCanvas = document.createElement("canvas");
   measureCanvas.width = sw; measureCanvas.height = sh;
   measureCanvas.getContext("2d").drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
   const meanLum = _measureCanvasLuminance(measureCanvas);
   const { b, c } = _adaptiveFilter(meanLum);
 
-  // Apply the computed filter to the full-res output
   const tmp = document.createElement("canvas");
   tmp.width = sw; tmp.height = sh;
   const tc = tmp.getContext("2d");
@@ -546,7 +576,6 @@ function commitEditedBlob() {
   tc.filter = "none";
   tmp.toBlob(blob => { editedBlob = blob; }, "image/jpeg", 0.95);
 
-  // Optional debug toast (remove in production)
   console.log(`commitEditedBlob: meanLum=${meanLum.toFixed(1)} → b=${b} c=${c}`);
 }
 
@@ -613,10 +642,6 @@ function onCropEnd() {
 }
 
 function applyAndSend() {
-  // editedBlob is already kept up to date by commitEditedBlob().
-  // This button now just resets the preprocessed view (so the editor
-  // shows the brightness/contrast image again, not the old OCR binary)
-  // and gives the user visual confirmation.
   preprocessedB64 = null;
   drawEditor();
   const btn = document.querySelector(".btn-gold.btn-sm");
@@ -679,7 +704,14 @@ async function runOCR() {
   const t0 = performance.now();
 
   try {
+    // Step 1: upload
+    setStep("s-up", "active", "Validating…"); await delay(80);
+    setStep("s-up", "done",   "Done");
+
+    // Step 2: preprocess
+    setStep("s-pre", "active", "CLAHE + Sauvola…");
     prog(15);
+
     let result;
 
     if (!demoMode) {
@@ -687,6 +719,12 @@ async function runOCR() {
 
       document.getElementById("det-loading").classList.add("show");
       document.getElementById("det-empty").style.display = "none";
+
+      // Step 3 + 4: detection & segmentation (run concurrently with the fetch)
+      setStep("s-det", "active", "CC Clustering…");
+      setStep("s-vpp", "active", "VPP Segmentation…");
+      setStep("s-rec", "active", "TrOCR…");
+      setStep("s-pre", "done",   "Done");
 
       const fd = new FormData();
       fd.append("image", blob);
@@ -702,10 +740,12 @@ async function runOCR() {
       if (result.error) throw new Error(result.error);
 
       document.getElementById("det-loading").classList.remove("show");
-      prog(70);
 
-      // Store preprocessed binary image for the "Preprocessed" tab
-      // and immediately update the editor canvas preview
+      setStep("s-det", "done", "Done"); prog(55);
+      setStep("s-vpp", "done", "Done"); prog(70);
+      setStep("s-rec", "done", "Done"); prog(82);
+
+      // Store preprocessed binary image
       preprocessedB64 = result.binary_b64 || null;
       if (preprocessedB64 && editorImg) drawEditor();
 
@@ -732,18 +772,30 @@ async function runOCR() {
       }
 
     } else {
-      await delay(700);
+      // Demo mode: animate steps with delays
+      setStep("s-pre", "done", "Done"); await delay(200);
+      setStep("s-det", "active", "CC Clustering…"); await delay(300);
+      setStep("s-det", "done",   "Done"); prog(55);
+      setStep("s-vpp", "active", "VPP Segmentation…"); await delay(200);
+      setStep("s-vpp", "done",   "Done"); prog(70);
+      setStep("s-rec", "active", "TrOCR…"); await delay(400);
+      setStep("s-rec", "done",   "Done"); prog(82);
       result = {...DEMO};
     }
 
-    prog(90);
+    // Step 5: NLP / spell correction
+    setStep("s-pp", "active", "NFC + Spell…"); await delay(80);
+    setStep("s-pp", "done",   "Done"); prog(92);
 
+    // Step 6: TTS
     if (opts.tts) {
+      setStep("s-tts", "active", "gTTS…");
       if (result.audio_url) {
         showAudio(API + result.audio_url);
       } else {
         await fetchTTS(result.final_text || "");
       }
+      setStep("s-tts", "done", "Done");
     }
     prog(100);
 
@@ -764,6 +816,7 @@ async function runOCR() {
 
   } catch(err) {
     console.error(err);
+    setStep("s-rec", "error", "Failed");
     document.getElementById("det-loading").classList.remove("show");
     toast("Error: " + err.message, "err");
   } finally {
@@ -776,6 +829,16 @@ async function runOCR() {
   }
 }
 
+// ─────────────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────────────
+function setStep(id, state, status) {
+  const el = document.getElementById(id);
+  el.className = "step " + state;
+  const s = el.querySelector(".ss");
+  if (state === "active") s.innerHTML = '<span class="spin dk"></span> ' + status;
+  else s.textContent = status;
+}
 
 function loadSample() {
   const c=document.createElement("canvas"); c.width=460; c.height=175;
@@ -796,11 +859,19 @@ function prog(v) {
   document.getElementById("pbar").style.width = v + "%";
 }
 
-
 function resetPipeline() {
   rawText = finalText = "";
   preprocessedB64 = null;
-  if (editorImg) drawEditor(); // revert canvas to raw image with fixed filter
+  if (editorImg) drawEditor();
+  ["s-up","s-pre","s-det","s-vpp","s-rec","s-pp"].forEach(id => {
+    const el = document.getElementById(id);
+    el.className = "step";
+    el.querySelector(".ss").textContent = "Waiting";
+  });
+  const tts = document.getElementById("s-tts");
+  tts.className = "step" + (opts.tts ? "" : " skip");
+  tts.querySelector(".ss").textContent = opts.tts ? "Queued" : "Skipped";
+
   const out = document.getElementById("output-area");
   out.className = "empty"; out.textContent = "Recognised Nepali text will appear here…";
   ["sv-w","sv-l","sv-f","sv-t"].forEach(id => document.getElementById(id).textContent = "—");

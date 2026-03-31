@@ -6,6 +6,14 @@ import logging
 import os
 from PIL import Image
 
+os.environ.setdefault("TRANSFORMERS_VERBOSITY",        "error")
+os.environ.setdefault("HF_HUB_DISABLE_SYMLINKS_WARNING", "1")
+os.environ.setdefault("TOKENIZERS_PARALLELISM",        "false")
+os.environ.setdefault("HF_HUB_DISABLE_IMPLICIT_TOKEN", "1")   
+
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub").setLevel(logging.WARNING)
+logging.getLogger("huggingface_hub.utils._http").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 TROCR_MODEL = os.getenv("TROCR_MODEL", "aayushpuri01/TrOCR-Devanagari")
@@ -23,14 +31,14 @@ def get_trocr():
                 VisionEncoderDecoderModel, AutoTokenizer,
                 ViTImageProcessor, TrOCRProcessor,
             )
-            logger.info(f"Loading TrOCR from Hub: {TROCR_MODEL} …")
+            print(f"Loading TrOCR mode: from ./model", flush=True)
             feature_extractor = ViTImageProcessor.from_pretrained(TROCR_MODEL)
             tokenizer         = AutoTokenizer.from_pretrained(TROCR_MODEL)
             _processor        = TrOCRProcessor(
                 image_processor=feature_extractor, tokenizer=tokenizer)
             _model            = VisionEncoderDecoderModel.from_pretrained(TROCR_MODEL)
             _model.eval()
-            logger.info("TrOCR loaded successfully.")
+            print("✓ TrOCR loaded successfully.")
         except Exception as e:
             logger.error(f"TrOCR load failed: {e}")
             _processor = _model = None

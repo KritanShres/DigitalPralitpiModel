@@ -152,14 +152,6 @@ def vocab_check():
 # ============================================================
 
 if __name__ == "__main__":
-    print("\n" + "=" * 60)
-    print("  Digital Pratilipi OCR  v12.1  [Modular Architecture]")
-    print("=" * 60)
-    print(f"  TROCR_MODEL : {os.getenv('TROCR_MODEL', 'aayushpuri01/TrOCR-Devanagari')}")
-    print(f"  VOCAB_DIR   : {os.getenv('NEPALI_VOCAB_DIR', 'data/')}")
-    print(f"  URL         : http://localhost:5000")
-    print("=" * 60 + "\n")
-
     # Warm up all singletons at startup
     get_trocr()
     _get_vocab()
