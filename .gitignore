@@ -1,9 +1,13 @@
 .vevn
 logs
+logs_v2
 checkpoints
+checkpoints_v2
 .env
 model
+model_v2
 mock-up-dataset
 charts
 images
-scripts/__pycache__
+preprocessing.py
+preprocessing.html

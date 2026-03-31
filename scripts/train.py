@@ -29,10 +29,10 @@ from dataloader import IAMDataset, dataset_generator
 # ===========================
 load_dotenv()
 os.environ["WANDB_DISABLED"] = "true"
-os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs"
+os.environ["TENSORBOARD_LOGGING_DIR"] = "./logs_v2"
 os.environ["HF_TOKEN"] = os.getenv("HF_TOKEN")
-if not os.path.exists("logs"):
-    os.makedirs("logs/")
+if not os.path.exists("logs_v2"):
+    os.makedirs("logs_v2/")
 
 # ===========================
 # DATA FILE PATHS
@@ -79,7 +79,7 @@ pad_id = processor.tokenizer.pad_token_id
 # ===========================
 training_args = Seq2SeqTrainingArguments(
     eval_strategy =  "steps",
-    output_dir = "./checkpoints/",
+    output_dir = "./checkpoints_v2/",
 
     per_device_train_batch_size = 8, #16 
     per_device_eval_batch_size = 16, #32 
@@ -95,7 +95,7 @@ training_args = Seq2SeqTrainingArguments(
 
     logging_steps = 50,
     save_steps = 2000, # 2000
-    eval_steps = 1000, # 2000
+    eval_steps = 2000, # 2000
     report_to = ['tensorboard'],
     load_best_model_at_end = True,
     save_total_limit = 3,
@@ -240,4 +240,4 @@ trainer.train(resume_from_checkpoint=last_checkpoint)
 # SAVE FINAL MODEL
 # ===========================
 os.makedirs("model/", exist_ok=True)
-model.save_pretrained("model/")
+model.save_pretrained("model_v2/")

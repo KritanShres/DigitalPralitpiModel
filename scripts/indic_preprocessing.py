@@ -25,8 +25,8 @@ import numpy as np
 # Configuration
 # ──────────────────────────────────────────────
 
-TRAIN_INPUT = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg\HindiSeg\train"
-VAL_INPUT   = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg\HindiSeg\val"
+TEST_INPUT = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg\HindiSeg\test"
+# VAL_INPUT   = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg\HindiSeg\val"
 OUTPUT_ROOT = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg\HindiSeg\preprocessed"
 
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
@@ -268,8 +268,8 @@ def main() -> None:
 
     log.info("Output root : %s", OUTPUT_ROOT)
 
-    process_split(TRAIN_INPUT, OUTPUT_ROOT, "train")
-    process_split(VAL_INPUT,   OUTPUT_ROOT, "val")
+    process_split(TEST_INPUT, OUTPUT_ROOT, "train")
+    # process_split(VAL_INPUT,   OUTPUT_ROOT, "val")
 
     log.info("All done.")
 

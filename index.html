@@ -500,18 +500,54 @@ function drawEditor() {
 // into a temporary off-screen canvas and commit it as editedBlob.
 // Called whenever the image or any edit changes so runOCR always gets
 // the same image the user is seeing, not the original upload.
+function _measureCanvasLuminance(srcCanvas) {
+  // Sample every 8th pixel for speed
+  const sCtx = srcCanvas.getContext("2d");
+  const d = sCtx.getImageData(0, 0, srcCanvas.width, srcCanvas.height).data;
+  let sum = 0, count = 0;
+  for (let i = 0; i < d.length; i += 32) {  // step=8px → 32 bytes
+    // Rec. 709 luminance
+    sum += 0.2126 * d[i] + 0.7152 * d[i+1] + 0.0722 * d[i+2];
+    count++;
+  }
+  return count > 0 ? sum / count : 128;
+}
+
+function _adaptiveFilter(meanLum) {
+  // Map luminance → (brightness multiplier, contrast multiplier)
+  // Very dark image  (mean < 60):  needs moderate boost
+  // Typical image   (60-160):     slight touch-up
+  // Already bright  (> 160):      no boost at all
+  if (meanLum < 60)  return { b: 1.4, c: 1.5 };
+  if (meanLum < 110) return { b: 1.2, c: 1.3 };
+  if (meanLum < 160) return { b: 1.05, c: 1.1 };
+  return              { b: 1.0,  c: 1.0 };   // leave bright images alone
+}
+
 function commitEditedBlob() {
   if (!editorImg) return;
   const src = getTransformedCanvas();
   let sx = 0, sy = 0, sw = src.width, sh = src.height;
   if (cropApplied) { sx=cropApplied.x; sy=cropApplied.y; sw=cropApplied.w; sh=cropApplied.h; }
+
+  // Measure luminance on the (possibly cropped) region
+  const measureCanvas = document.createElement("canvas");
+  measureCanvas.width = sw; measureCanvas.height = sh;
+  measureCanvas.getContext("2d").drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
+  const meanLum = _measureCanvasLuminance(measureCanvas);
+  const { b, c } = _adaptiveFilter(meanLum);
+
+  // Apply the computed filter to the full-res output
   const tmp = document.createElement("canvas");
   tmp.width = sw; tmp.height = sh;
   const tc = tmp.getContext("2d");
-  tc.filter = "brightness(2.0) contrast(2.0)";
+  tc.filter = `brightness(${b}) contrast(${c})`;
   tc.drawImage(src, sx, sy, sw, sh, 0, 0, sw, sh);
   tc.filter = "none";
   tmp.toBlob(blob => { editedBlob = blob; }, "image/jpeg", 0.95);
+
+  // Optional debug toast (remove in production)
+  console.log(`commitEditedBlob: meanLum=${meanLum.toFixed(1)} → b=${b} c=${c}`);
 }
 
 function rotateImg(deg) { rotation=(rotation+deg+360)%360; cropApplied=null; drawEditor(); commitEditedBlob(); }

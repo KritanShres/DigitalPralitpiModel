@@ -30,10 +30,19 @@ def dataset_generator(data_path):
         dataset = f.readlines()
     dataset_list = []
     for i in range(len(dataset)):
-        image_id = dataset[i].split("\n")[0].split(' ')[0].strip()
-        text = dataset[i].split("\n")[0].split(' ')[1].strip()
-        row = [image_id, text]
-        dataset_list.append(row)
+        line = dataset[i].strip()
+        if not line:
+            continue
+        parts = line.split(' ', 1)
+        image_id = parts[0].strip()
+        text = parts[1].strip() if len(parts) > 1 else ""
 
-    dataset_df = pd.DataFrame(dataset_list, columns=['file_name', 'text'])
-    return dataset_df
+        # Normalize path separators
+        image_id = image_id.replace("/", os.sep).replace("\\", os.sep)
+
+        # Replace .jpg extension with .png
+        image_id = os.path.splitext(image_id)[0] + ".png"
+
+        dataset_list.append([image_id, text])
+
+    return pd.DataFrame(dataset_list, columns=['file_name', 'text'])
