@@ -490,7 +490,7 @@ function drawEditor() {
     const scale = Math.min(maxW / sw, maxH / sh, 1);
     canvas.width  = Math.round(sw * scale);
     canvas.height = Math.round(sh * scale);
-    ctx.filter = "brightness(2.0) contrast(2.0)";
+    ctx.filter = "brightness(1) contrast(1)";
     ctx.drawImage(src, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
     ctx.filter = "none";
   }
