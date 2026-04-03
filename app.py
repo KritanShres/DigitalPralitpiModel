@@ -1,26 +1,3 @@
-"""
-app.py — Digital Pratilipi: Nepali Handwritten OCR
-Kantipur Engineering College — CT 755 Major Project  v12.1
-
-Flask API entry point.  All logic lives in src/:
-  src/preprocessing.py  — image preprocessing pipeline (v12)
-  src/detection.py      — line + word detection (CC + VPP v3)
-  src/ocr.py            — TrOCR model loader and inference
-  src/vocabulary.py     — Nepali vocabulary + BK-tree spell correction
-  src/postprocessing.py — NFC normalisation, spell correction, TTS
-  src/pipeline.py       — end-to-end orchestration + visualisation
-
-Routes:
-  GET  /              → serve index.html
-  GET  /health        → service status JSON
-  POST /ocr           → run full OCR pipeline
-  POST /ocr_full      → alias for /ocr
-  POST /tts           → text-to-speech (POST JSON {"text": "…"})
-  GET  /audio         → download last generated audio
-  POST /detect_viz    → detection visualisation only (no OCR)
-  POST /vocab_check   → debug: vocabulary membership + BK neighbours
-"""
-
 import os
 import logging
 

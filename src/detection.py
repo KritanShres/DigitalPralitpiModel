@@ -1,27 +1,3 @@
-"""
-src/detection.py — Line and word detection for Devanagari handwriting
-
-Line detection : Connected Component Y-centroid clustering  (v2)
-Word detection : VPP (Vertical Projection Profile) per line band  (v3)
-
-Detection v2/v3 fixes:
-  Bug A — Fixed LINE_GAP=25 too small for multi-line documents.
-    Fix: dynamic LINE_GAP = max(20, int(median_char_h * 0.55)).
-    Bands shorter than 40% of median_char_h are discarded (diacritic-only).
-
-  Bug B — Band padding eats into adjacent lines.
-    Fix: fixed 3px pad; adjacent bands clamped to their midpoint.
-
-  Bug C — Box height equals full band height → overlaps adjacent lines.
-    Fix: tight per-word ink extent from actual ink rows in column span.
-
-  Bug D — Broken shirorekha splits one word into two.
-    Fix: merge gap 10px; shirorekha suppression zone top 1/4.
-
-  Bug E — Conjunct consonants (द्व, त्य, न्य …) split a word.
-    Fix: Pass 2 conjunct-aware merge with dynamic ceiling and min_gap guard.
-"""
-
 import logging
 import numpy as np
 import cv2
@@ -60,22 +36,6 @@ def get_easyocr():
 # ============================================================
 
 def _find_line_bands(binary: np.ndarray) -> list[tuple[int, int]]:
-    """
-    Detect text line bands by clustering CC blobs on their Y centroid.
-
-    Steps:
-      1. Collect character-sized blobs (area 30–0.5% of image,
-         height 5px–30% of image height).
-      2. Estimate median character height from accepted blobs.
-      3. Set dynamic LINE_GAP = max(20, int(median_char_h * 0.55)).
-      4. Sort blobs by Y centroid; cluster with LINE_GAP.
-      5. Discard bands whose height < 40% of median_char_h
-         (diacritic-only bands).
-      6. Clamp adjacent bands to their midpoint to prevent overlap.
-      7. Apply a conservative fixed pad of 3px.
-
-    Returns sorted list of (y_start, y_end).
-    """
     img_h, img_w = binary.shape
     n, _, stats_cc, centroids = cv2.connectedComponentsWithStats(
         binary, connectivity=8)
@@ -149,22 +109,6 @@ def _find_line_bands(binary: np.ndarray) -> list[tuple[int, int]]:
 def _find_words_in_band(binary: np.ndarray,
                         y1: int, y2: int,
                         img_w: int) -> list[dict]:
-    """
-    Find word bounding boxes within a line band using Vertical Projection Profile.
-
-    Pipeline:
-      1. Extract full strip (for tight height & conjunct detection).
-      2. Shirorekha-suppressed copy: blank top 1/4 of strip.
-      3. VPP on suppressed strip → column gap map.
-      4. PASS 1 — merge gaps <= 10px (minor broken shirorekha).
-      5. PASS 2 — conjunct-aware merge (gaps 11–14px with dynamic ceiling):
-           B) gap interior completely empty in full strip
-           C) sub-shirorekha ink in single column left of gap
-           D) sub-shirorekha ink in single column right of gap
-           E) gap narrower than 70% of line's minimum gap (conjunct guard)
-      6. Filter spans: width 15px–75% of image, area >= 200px².
-      7. Tight per-word ink height from the FULL strip + 3px pad.
-    """
     img_h, _ = binary.shape
     band_h   = y2 - y1
     if band_h < 4:
@@ -193,7 +137,6 @@ def _find_words_in_band(binary: np.ndarray,
     if in_s:
         spans.append([cs, img_w])
 
-    # ── PASS 1: merge gaps <= 10px (minor broken strokes) ────────────────
     MERGE_GAP_1 = 10
     merged = []
     for s in spans:
@@ -201,18 +144,6 @@ def _find_words_in_band(binary: np.ndarray,
             merged[-1][1] = s[1]
         else:
             merged.append(s[:])
-
-    # ── PASS 2: conjunct-aware merge ─────────────────────────────────────
-    # A gap is a conjunct break (not a word boundary) when ALL of:
-    #   A) gap_w is in [11, dynamic_ceil] px
-    #   B) gap interior completely empty in full strip
-    #   C) sub-shirorekha ink in single column immediately left of gap
-    #   D) sub-shirorekha ink in single column immediately right of gap
-    #   E) gap_w < 70% of line's minimum gap (conjunct gaps are narrowest)
-    #
-    # dynamic_ceil = min(14, median_gap * 0.45), clamped >= 11.
-    # This prevents over-merging on cursive text where all inter-word
-    # gaps are uniformly narrow (condition E rejects them).
 
     body_strip = full_strip[suppress_rows:, :]   # below shirorekha zone
 
@@ -235,12 +166,10 @@ def _find_words_in_band(binary: np.ndarray,
 
         if 10 < gap_w <= dynamic_ceil:
 
-            # E — must be clearly narrower than the line's minimum gap
             if gap_w >= min_gap * 0.70:
                 i += 1
                 continue
 
-            # B — gap interior completely empty in full strip
             gap_ink = int(np.sum(full_strip[:, ga:gb]))
             if gap_ink == 0:
 
@@ -259,7 +188,6 @@ def _find_words_in_band(binary: np.ndarray,
 
         i += 1
 
-    # ── Build boxes with tight ink height ────────────────────────────────
     PAD_H = 3
     boxes = []
     for x1, x2 in merged:
@@ -345,17 +273,7 @@ def _easyocr_fallback(img_bgr: np.ndarray,
 def detect_words(img_bgr: np.ndarray,
                  binary: np.ndarray = None,
                  min_area: int = 300) -> tuple[list, list]:
-    """
-    Full detection pipeline:
-      1. CC Y-centroid clustering → line bands
-      2. VPP per band             → word boxes with tight heights
-      3. EasyOCR emergency fallback if nothing found
-
-    Returns (flat_boxes, line_groups).
-    """
     if binary is None:
-        # Use the same unconditional pipeline as preprocess()
-        # so detection is consistent regardless of which code path calls it.
         gray   = _to_grayscale(img_bgr)
         gray   = _retinex_normalise(gray)
         gray   = _apply_clahe(gray)
@@ -387,12 +305,6 @@ def detect_words(img_bgr: np.ndarray,
 # ============================================================
 
 def crop_word(img_bgr: np.ndarray, box: dict, padding: int = 8) -> Image.Image:
-    """
-    Crop a word region from the colour image with padding and enhance for TrOCR:
-      - Resize to 64px height (keeps aspect ratio)
-      - CLAHE contrast normalisation in LAB colour space
-      - Return as RGB PIL image
-    """
     h, w = img_bgr.shape[:2]
     x1   = max(0, box["x"] - padding)
     y1   = max(0, box["y"] - padding)

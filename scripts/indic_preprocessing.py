@@ -25,9 +25,11 @@ import numpy as np
 # Configuration
 # ──────────────────────────────────────────────
 
-TEST_INPUT = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg\HindiSeg\test"
-# VAL_INPUT   = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg\HindiSeg\val"
-OUTPUT_ROOT = r"C:\Users\ASUS\Desktop\IIIT-HW-Hindi_v1\HindiSeg\HindiSeg\preprocessed"
+# copy path from your dataset folder
+TRAIN_INPUT = r""
+TEST_INPUT = r""
+VAL_INPUT   = r""
+OUTPUT_ROOT = r""
 
 SUPPORTED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".tif", ".webp"}
 SKIP_EXTENSIONS             = {".txt", ".py", ".json", ".xml", ".csv", ".md"}
@@ -80,7 +82,6 @@ def to_grayscale(image: np.ndarray) -> np.ndarray:
 # ──────────────────────────────────────────────
 
 def binarize(gray: np.ndarray) -> np.ndarray:
-    """Apply Otsu's global thresholding to produce a binary image."""
     assert gray.ndim == 2, "Input must be a single-channel grayscale image."
     _, binary = cv2.threshold(
         gray, 0, 255,
@@ -94,17 +95,6 @@ def binarize(gray: np.ndarray) -> np.ndarray:
 # ──────────────────────────────────────────────
 
 def correct_skew(binary: np.ndarray, max_angle: float = 45.0) -> np.ndarray:
-    """
-    Detect skew via Hough Line Transform and rotate the image to correct it.
-    Skips rotation when the detected angle is negligibly small (< 0.3°).
-
-    Args:
-        binary:    Binarised single-channel image.
-        max_angle: Only consider line angles within ±max_angle degrees.
-
-    Returns:
-        De-skewed binary image (same dtype/shape).
-    """
     assert binary.ndim == 2, "Input must be a single-channel binary image."
 
     inverted = cv2.bitwise_not(binary)
@@ -156,16 +146,6 @@ def correct_skew(binary: np.ndarray, max_angle: float = 45.0) -> np.ndarray:
 # ──────────────────────────────────────────────
 
 def preprocess_image(image_path: Path) -> np.ndarray:
-    """
-    Run the complete preprocessing pipeline on a single image.
-
-    Pipeline:
-        1. Load  (BGR / BGRA via OpenCV)
-        2. Sharpen          (3×3 convolution kernel)
-        3. Grayscale        (BGR → single-channel)
-        4. Binarize         (Otsu's global threshold)
-        5. Skew-correct     (Hough line transform)
-    """
     img = cv2.imread(str(image_path), cv2.IMREAD_UNCHANGED)
     if img is None:
         raise ValueError(f"Could not read image: {image_path}")
@@ -187,14 +167,6 @@ def is_image(path: Path) -> bool:
 
 
 def process_split(input_root: str, output_root: str, split_name: str) -> None:
-    """
-    Recursively walks `input_root`, finds every image regardless of how deep
-    the numeric sub-folders go, preprocesses it, and saves the result under
-    `output_root / split_name` mirroring the original directory tree.
-
-    Non-image files (.txt, .py, …) are silently skipped.
-    Preprocessed images are saved as lossless PNGs.
-    """
     src_root = Path(input_root)
     dst_root = Path(output_root) / split_name
 
@@ -269,7 +241,8 @@ def main() -> None:
     log.info("Output root : %s", OUTPUT_ROOT)
 
     process_split(TEST_INPUT, OUTPUT_ROOT, "train")
-    # process_split(VAL_INPUT,   OUTPUT_ROOT, "val")
+    process_split(VAL_INPUT,   OUTPUT_ROOT, "val")
+    process_split(TRAIN_INPUT, OUTPUT_ROOT = "train")
 
     log.info("All done.")
 

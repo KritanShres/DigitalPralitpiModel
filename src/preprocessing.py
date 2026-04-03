@@ -1,67 +1,3 @@
-"""
-src/preprocessing.py — Image preprocessing pipeline (v13 — consistent)
-
-Design goal: every image — regardless of camera exposure, paper colour,
-ambient light, or phone white-balance — should produce a binary output
-of equivalent quality with no per-image branching.
-
-Problem with v12:
-  The pipeline used is_dark / is_flat / is_nonuniform flags to decide
-  whether to apply gamma lift, CLAHE, or illumination normalisation.
-  Because these flags depend on per-image statistics (mean brightness,
-  std, block uniformity), different images took completely different code
-  paths, producing wildly inconsistent binarization quality.
-
-  Example:
-    image 9.jpg  mean=178 → no CLAHE → clean Otsu
-    image 8.jpg  mean=153 → CLAHE fires → distorted output
-    image 7.jpg  mean=168 → no CLAHE → acceptable
-  The "same algorithm" behaved like three different algorithms.
-
-v13 fix — two unconditional normalisation steps before Otsu:
-
-  STEP A — Retinex background normalisation (ALWAYS applied)
-  ─────────────────────────────────────────────────────────
-  Estimate the slowly-varying background using a very large Gaussian
-  kernel (≥ 1/4 of the smaller image dimension, minimum 101px).
-  At this scale the kernel averages over entire character heights and
-  only the paper/illumination envelope remains.
-
-  Normalised = clip( (gray / background) × 200, 0, 255 )
-
-  Effect: every image emerges with paper pixels ≈ 200 and ink pixels
-  proportionally darker, regardless of original exposure or paper colour.
-  All four test images converge to norm_mean ≈ 199.4 after this step.
-
-  This replaces both _normalize_illumination (which only fired for
-  non-uniform images) and _adaptive_gamma (which only fired for dark
-  images). It handles both uniformly and non-uniformly lit images.
-
-  STEP B — Fixed gentle CLAHE (ALWAYS applied)
-  ─────────────────────────────────────────────
-  A single CLAHE pass with clipLimit=2.0 and 8×8 tiles applied after
-  retinex normalisation. This spreads the ink/paper histogram slightly,
-  ensuring Otsu's threshold lands in a clean valley even on low-contrast
-  images (thin pencil strokes, faded ink).
-
-  clipLimit=2.0 is conservative — it enhances without amplifying noise.
-  Unlike v12 where CLAHE was skipped for bright images, here it is always
-  applied after retinex has already standardised the brightness.
-
-  After these two steps, all images have consistent statistics and a
-  reliable single-threshold Otsu binarization works cleanly.
-
-Pipeline stages (v13):
-  1. Upscale to >= 960px wide
-  2. Grayscale
-  3. Adaptive sharpening  (α = min(α_mean, α_std), unchanged from v12)
-  4. Re-grayscale
-  5. Retinex background normalisation  (UNCONDITIONAL — replaces steps 5+6 of v12)
-  6. CLAHE                             (UNCONDITIONAL — always clip=2.0, tiles 8×8)
-  7. Smart binarization  (Otsu; adaptiveThreshold fallback if T extreme)
-  8. Skew correction with expanded canvas (no content clipping)
-"""
-
 import logging
 import numpy as np
 import cv2
@@ -109,23 +45,6 @@ def _adaptive_sharpen(image: np.ndarray, mean: float, std: float) -> np.ndarray:
 # ============================================================
 
 def _retinex_normalise(gray: np.ndarray) -> np.ndarray:
-    """
-    Divide by the slowly-varying background envelope to remove the effect
-    of paper colour, exposure, and uneven illumination — all in one step.
-
-    Algorithm:
-      background = GaussianBlur(gray, ksize)
-        ksize = next odd >= max(101, min(h, w) // 4)
-        At this scale every character is blurred away; only the
-        paper/illumination surface remains.
-      normalised = clip( float(gray) / (background + ε) × 200, 0, 255 )
-
-    The ×200 scale factor places paper pixels at ≈200 and ink at ≈0–150,
-    regardless of the original exposure, paper colour, or lighting gradient.
-
-    Verified on test set: all four images converge to norm_mean ≈ 199.4
-    after this step, compared to original means of 153–184.
-    """
     h, w = gray.shape
     k    = max(101, min(h, w) // 4)
     k    = k if k % 2 == 1 else k + 1
@@ -149,18 +68,6 @@ def _retinex_normalise(gray: np.ndarray) -> np.ndarray:
 # ============================================================
 
 def _apply_clahe(gray: np.ndarray) -> np.ndarray:
-    """
-    Apply CLAHE with fixed conservative settings.
-
-    clipLimit=2.0 — gentle enhancement, does not amplify noise.
-    tileGridSize=(8, 8) — coarse enough to span multiple characters,
-      fine enough to correct within-character contrast variation.
-
-    Applied unconditionally after retinex normalisation.  Since retinex
-    has already standardised the background to ≈200, CLAHE here only
-    spreads the ink histogram slightly without risk of destroying the
-    ink/paper valley that Otsu needs.
-    """
     clahe  = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
     result = clahe.apply(gray)
     logger.info(
@@ -175,15 +82,6 @@ def _apply_clahe(gray: np.ndarray) -> np.ndarray:
 # ============================================================
 
 def _fix_polarity(binary: np.ndarray) -> np.ndarray:
-    """
-    Ensure INK=WHITE (255), background=BLACK (0).
-
-    Check 1+2 — white fraction:
-      >0.90 or <0.10 → clearly wrong polarity → invert.
-      >0.50           → background is white    → invert.
-    Check 3 — border strip (almost always background):
-      border >75% white → background mapped to white → invert.
-    """
     white_frac = float(np.count_nonzero(binary)) / binary.size
 
     if white_frac > 0.90 or white_frac < 0.10:
@@ -209,29 +107,11 @@ def _fix_polarity(binary: np.ndarray) -> np.ndarray:
 
 
 def _morphological_cleanup(binary: np.ndarray) -> np.ndarray:
-    """
-    3×3 morphological opening removes noise blobs introduced by CLAHE.
-    Devanagari matras/nuktas are ≥4px wide at 960px — safe from erosion.
-    """
     kernel = np.ones((3, 3), dtype=np.uint8)
     return cv2.morphologyEx(binary, cv2.MORPH_OPEN, kernel, iterations=1)
 
 
 def _smart_binarize(gray: np.ndarray) -> np.ndarray:
-    """
-    Binarize the retinex+CLAHE normalised grayscale image.
-
-    Primary path: Otsu global threshold.
-    Fallback: adaptiveThreshold when Otsu T is extreme (<15 or >240),
-      which indicates the histogram is unimodal (blank page, solid fill).
-
-    Convention on exit: INK=WHITE (255), background=BLACK (0).
-
-    Note: since retinex normalisation has already standardised all images
-    to paper≈200, Otsu reliably finds the ink/paper valley without any
-    per-image tuning. The adaptiveThreshold fallback is kept as a safety
-    net for pathological inputs only.
-    """
     assert gray.ndim == 2
 
     h      = gray.shape[0]
@@ -264,21 +144,6 @@ def _smart_binarize(gray: np.ndarray) -> np.ndarray:
 
 def _rotation_matrix_expanded(h: int, w: int,
                                angle_deg: float) -> tuple[np.ndarray, int, int]:
-    """
-    Build a rotation matrix whose canvas expands to fit all rotated content.
-
-    Standard warpAffine with the original (w, h) canvas clips pixels that
-    rotate outside the frame — even at 2° this cuts off top ascenders and
-    right-edge letters.
-
-    Fix:
-      1. Rotate all 4 corners of the image.
-      2. Find the bounding box of those corners.
-      3. Shift the matrix so the top-left corner lands at (0, 0).
-      4. Return the adjusted matrix and the new (canvas_w, canvas_h).
-
-    Returns (M_adjusted, new_w, new_h).
-    """
     cx, cy = w / 2.0, h / 2.0
     M = cv2.getRotationMatrix2D((cx, cy), angle_deg, 1.0)
 
@@ -300,15 +165,6 @@ def _rotation_matrix_expanded(h: int, w: int,
 
 
 def _correct_skew(binary: np.ndarray) -> tuple[np.ndarray, float, np.ndarray, int, int]:
-    """
-    Detect and correct skew via HoughLinesP on Canny edges.
-
-    Uses an expanded canvas so no content is clipped after rotation.
-
-    Returns (corrected_binary, skew_angle_deg, M_expanded, new_w, new_h).
-    Pass M_expanded / new_w / new_h to the caller so the colour image
-    can be warped with the identical transform.
-    """
     assert binary.ndim == 2
     inverted = cv2.bitwise_not(binary)
     edges    = cv2.Canny(inverted, 50, 150, apertureSize=3)
@@ -346,21 +202,6 @@ def _correct_skew(binary: np.ndarray) -> tuple[np.ndarray, float, np.ndarray, in
 # ============================================================
 
 def preprocess(pil_image: Image.Image) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Full preprocessing pipeline (v13 — consistent across all images).
-
-    Steps:
-      1. Upscale to >= 960px wide
-      2. Grayscale
-      3. Adaptive sharpening   (α = min(α_mean, α_std))
-      4. Re-grayscale
-      5. Retinex normalisation (UNCONDITIONAL — paper→≈200, ink proportional)
-      6. CLAHE                 (UNCONDITIONAL — clip=2.0, 8×8 tiles)
-      7. Smart binarization    (Otsu; adaptiveThreshold fallback if T extreme)
-      8. Skew correction       (expanded canvas, no clipping)
-
-    Returns (colour_bgr, binary_ink_white).
-    """
     img_bgr = cv2.cvtColor(
         np.array(pil_image.convert("RGB")), cv2.COLOR_RGB2BGR
     )
@@ -388,7 +229,6 @@ def preprocess(pil_image: Image.Image) -> tuple[np.ndarray, np.ndarray]:
     gray = _to_grayscale(sharpened)
 
     # Step 5 — Retinex background normalisation (unconditional)
-    # Brings all images to paper≈200 regardless of original exposure/colour.
     gray = _retinex_normalise(gray)
 
     # Step 6 — CLAHE (unconditional, gentle)

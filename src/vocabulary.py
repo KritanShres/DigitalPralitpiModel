@@ -1,13 +1,3 @@
-"""
-src/vocabulary.py — Nepali vocabulary loading and BK-tree spell correction
-
-Vocabulary sources:
-  VOCAB_DIR/vocabulary-dictionary  — nepali-bhasa/nepali-spell (~75k forms)
-  VOCAB_DIR/vocabulary-corpus      — frequency corpus
-
-BK-tree nearest-neighbour search on Unicode code-points (Levenshtein).
-"""
-
 import logging
 import os
 import re
@@ -96,10 +86,6 @@ def _get_vocab() -> set[str]:
 # ============================================================
 
 class _BKTree:
-    """
-    Minimal BK-tree over Unicode strings using Levenshtein distance.
-    Supports efficient nearest-neighbour queries in sub-linear time.
-    """
     __slots__ = ("word", "children")
 
     def __init__(self, word: str):
@@ -166,16 +152,6 @@ def _get_bktree() -> _BKTree | None:
 # ============================================================
 
 def spell_correct(word: str, max_dist: int = 1) -> tuple[str, bool]:
-    """
-    Return (corrected_word, was_changed).
-
-    Strategy:
-      1. NFC-normalise.
-      2. Skip short, non-Devanagari, or punctuation tokens.
-      3. O(1) set-membership → already correct.
-      4. BK-tree search (max_dist+1 for words len>=6, capped at 2).
-      5. Prefer dictionary words over corpus-only; tie-break alphabetically.
-    """
     word = _nfc(word)
     if not word or len(word) < 3:         return word, False
     if _RE_NON_WORD.match(word):          return word, False

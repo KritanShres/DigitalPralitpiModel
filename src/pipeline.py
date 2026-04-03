@@ -1,10 +1,3 @@
-"""
-src/pipeline.py — End-to-end OCR pipeline orchestration
-
-Ties together: preprocessing → detection → TrOCR → postprocessing.
-Also provides the detection visualisation helper.
-"""
-
 import base64
 import logging
 
@@ -27,10 +20,6 @@ logger = logging.getLogger(__name__)
 def _render_detection_viz(img_bgr: np.ndarray,
                           line_groups: list,
                           binary: np.ndarray = None) -> str:
-    """
-    Draw coloured bounding boxes on the preprocessed binary image
-    (inverted to black-ink-on-white) and return as base64 JPEG.
-    """
     if binary is not None:
         vis = cv2.cvtColor(cv2.bitwise_not(binary), cv2.COLOR_GRAY2BGR)
     else:
@@ -57,20 +46,6 @@ def _render_detection_viz(img_bgr: np.ndarray,
 # ============================================================
 
 def run_pipeline(pil_image: Image.Image, speak: bool = False) -> dict:
-    """
-    Run the full OCR pipeline on a PIL image.
-
-    Steps:
-      1. Preprocess  → (colour_bgr, binary)
-      2. Detect      → (boxes, line_groups)
-      3. TrOCR       → recognised text per word
-      4. Postprocess → spell correction + NFC normalisation
-      5. (Optional) TTS
-
-    Returns a dict with keys:
-      raw_text, final_text, corrections, word_count, regions,
-      lines, audio_url, method, viz_b64, binary_b64, line_count
-    """
     logger.info("=== Pipeline start ===")
 
     img_bgr, binary = preprocess(pil_image)
